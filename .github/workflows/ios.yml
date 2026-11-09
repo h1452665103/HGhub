@@ -5,6 +5,7 @@ on:
 jobs:
   ios:
     runs-on: macos-latest
+    timeout-minutes: 90
     env:
       CI: "true"
     steps:
@@ -22,38 +23,36 @@ jobs:
       - run: brew install xcodegen cocoapods
       - run: pnpm install --frozen-lockfile
 
-      - name: 检查 iOS runtime
+      - name: 升级 Tauri CLI（2.10.1 没有 --no-sign）
+        run: pnpm add -D @tauri-apps/cli@2.12.4
+
+      - name: 环境诊断
         run: |
           {
-            echo "### 环境诊断"
+            echo '### 环境'
             echo '```'
             xcodebuild -version
-            xcrun --sdk iphoneos --show-sdk-path || true
-            xcrun simctl list runtimes || true
+            xcrun simctl list runtimes | grep -i '^iOS' || true
             rustup target list --installed | grep ios || true
+            pnpm tauri --version || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if ! xcrun simctl list runtimes 2>/dev/null | grep -q '^iOS'; then
-            echo "缺少 iOS runtime，开始下载（可能 10 分钟以上）"
-            xcodebuild -downloadPlatform iOS
-          fi
+      - name: 前端构建
+        run: pnpm build
 
       - name: 生成 iOS 工程
-        run: pnpm dlx @tauri-apps/cli@2.12.4 ios init --ci
+        run: pnpm tauri ios init --ci
 
       - name: 构建未签名 ipa
         run: |
           set +e
-          pnpm dlx @tauri-apps/cli@2.12.4 ios build --no-sign --ignore-version-mismatches 2>&1 | tee build.log
+          pnpm tauri ios build --no-sign --ignore-version-mismatches 2>&1 | tee build.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            {
-              echo "### 构建失败 (exit $status)"
-              echo '```'
-              tail -n 150 build.log
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            MSG=$(tail -n 40 build.log | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}' | head -c 4000)
+            echo "::error title=iOS build failed::${MSG}"
+            { echo "### 构建失败 (exit $status)"; echo '```'; tail -n 150 build.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
 
