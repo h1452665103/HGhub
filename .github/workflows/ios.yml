@@ -1,0 +1,48 @@
+name: iOS unsigned ipa
+on:
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - run: brew install xcodegen cocoapods
+      - run: pnpm install --frozen-lockfile
+      # 直接 xcodebuild 会绕过 Tauri 的 beforeBuildCommand，前端必须手动先构建
+      - run: pnpm build
+      - run: pnpm tauri ios init --ci
+
+      - name: Archive (unsigned)
+        run: |
+          set -euo pipefail
+          cd src-tauri/gen/apple
+          TARGET_ARG="-project HGhub.xcodeproj"
+          [ -d HGhub.xcworkspace ] && TARGET_ARG="-workspace HGhub.xcworkspace"
+          xcodebuild $TARGET_ARG -scheme HGhub -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive -archivePath build/HGhub.xcarchive
+
+      - name: Package ipa
+        run: |
+          set -euo pipefail
+          APP=$(find src-tauri/gen/apple/build/HGhub.xcarchive/Products/Applications -maxdepth 1 -name '*.app' | head -1)
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qr HGhub-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HGhub-unsigned-ipa
+          path: HGhub-unsigned.ipa
